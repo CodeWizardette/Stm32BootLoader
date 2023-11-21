@@ -110,7 +110,18 @@ class CommandInterface:
             self.sp.write(chr(byte))
         return self._wait_for_ask("Write Memory")
 
-    # Diğer metodlar buraya ekleyin...
+    #TEST EKLE CİHAZI DENESİN
+    def customCommand(self, custom_data):
+        """
+        Bu metod, cihaza özel bir komut gönderir ve yanıtı bekler.
+        """
+        try:
+            self.sp.write(custom_data.encode())  # Özel komutu gönderin
+            response = self.sp.read(1)  # Yanıtı okuyun (örnekte 1 byte olarak kabul edildi)
+            return response.decode()  # Yanıtı string olarak döndürün
+        except Exception as e:
+            raise CmdException(f"Özel komut gönderilirken bir hata oluştu: {e}")
+    
 
     def readMemory(self, addr, lng):
         data = []
