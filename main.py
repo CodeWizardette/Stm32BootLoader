@@ -1,3 +1,4 @@
+#smtboo
 import sys
 import getopt
 import serial
@@ -8,11 +9,7 @@ try:
     usepbar = 1
 except ImportError:
     usepbar = 0
-
-# Ayrıntı seviyesi
 QUIET = 20
-
-# Bu değerler AN2606'dan gelmektedir
 chip_ids = {
     0x412: "STM32 Düşük Yoğunluklu",
     0x410: "STM32 Orta Yoğunluklu",
@@ -27,27 +24,28 @@ chip_ids = {
 
 def mdebug(seviye, mesaj):
     if QUIET >= seviye:
-        print >>sys.stderr, mesaj
-
+        print(mesaj)
 
 class CmdException(Exception):
     pass
 
-
 class CommandInterface:
     extended_erase = 0
 
-    def open(self, port='/dev/tty.usbserial-ftCYPMYJ', baudrate=115200):
-        self.sp = serial.Serial(
-            port=port,
-            baudrate=baudrate,
-            bytesize=8,
-            parity=serial.PARITY_EVEN,
-            stopbits=1,
-            xonxoff=0,
-            rtscts=0,
-            timeout=5
-        )
+    def open(self, port='/dev/ttyUSB0', baudrate=115200):
+        try:
+            self.sp = serial.Serial(
+                port=port,
+                baudrate=baudrate,
+                bytesize=8,
+                parity=serial.PARITY_EVEN,
+                stopbits=1,
+                xonxoff=0,
+                rtscts=0,
+                timeout=5
+            )
+        except serial.SerialException as e:
+            raise CmdException(f"Port açılamıyor: {e}")
 
     def _wait_for_ask(self, info=""):
         try:
@@ -84,9 +82,35 @@ class CommandInterface:
         self.sp.write(chr(cmd ^ 0xFF))
         return self._wait_for_ask(hex(cmd))
 
-    # Diğer metodlar buraya eklenmeli...
+    def cmdReadMemory(self, addr, length):
+        self.sp.write(chr(0x11))
+        self.sp.write(chr(0xEE))
+        self.sp.write(chr(0x11 ^ 0xFF))
+        self.sp.write(chr(0xEE ^ 0xFF))
+        self.sp.write(chr((addr >> 24) & 0xFF))
+        self.sp.write(chr((addr >> 16) & 0xFF))
+        self.sp.write(chr((addr >> 8) & 0xFF))
+        self.sp.write(chr(addr & 0xFF))
+        self.sp.write(chr((length - 1) & 0xFF))
+        self.sp.write(chr(((length - 1) ^ 0xFF) & 0xFF))
+        return self._wait_for_ask("Read Memory")
 
-# Kompleks komutlar bölümü buraya eklenmeli...
+    def cmdWriteMemory(self, addr, data):
+        self.sp.write(chr(0x31))
+        self.sp.write(chr(0xCE))
+        self.sp.write(chr(0x31 ^ 0xFF))
+        self.sp.write(chr(0xCE ^ 0xFF))
+        self.sp.write(chr((addr >> 24) & 0xFF))
+        self.sp.write(chr((addr >> 16) & 0xFF))
+        self.sp.write(chr((addr >> 8) & 0xFF))
+        self.sp.write(chr(addr & 0xFF))
+        self.sp.write(chr((len(data) - 1) & 0xFF))
+        self.sp.write(chr(((len(data) - 1) ^ 0xFF) & 0xFF))
+        for byte in data:
+            self.sp.write(chr(byte))
+        return self._wait_for_ask("Write Memory")
+
+    # Diğer metodlar buraya ekleyin...
 
     def readMemory(self, addr, lng):
         data = []
@@ -167,7 +191,7 @@ if __name__ == "__main__":
         pass
 
     conf = {
-        'port': '/dev/tty.usbserial-ftCYPMYJ',
+        'port': '/dev/ttyUSB0',
         'baud': 115200,
         'address': 0x08000000,
         'erase': 0,
@@ -216,44 +240,55 @@ if __name__ == "__main__":
             assert False, "işlenmeyen seçenek"
 
     cmd = CommandInterface()
-    cmd.open(conf['port'], conf['baud'])
+    try:
+        cmd.open(conf['port'], conf['baud'])
+    except CmdException as e:
+        print(e)
+        sys.exit(1)
+
     mdebug(10, "Port açık: %(port)s, baud: %(baud)d" % {'port': conf['port'], 'baud': conf['baud']})
+
     try:
         try:
             cmd.initChip()
-        except:
-            print ("Başlatılamıyor. BOOT0'un etkin olduğundan ve cihazın sıfırlandığından emin olun")
-        bootversion = cmd.cmdGet()
+        except CmdException:
+            print("Başlatılamıyor. BOOT0'un etkin olduğundan ve cihazın sıfırlandığından emin olun")
+
+        bootversion = cmd.cmdGeneric(0x00)
         mdebug(0, "Bootloader sürümü %X" % bootversion)
-        id = cmd.cmdGetID()
+
+        id = cmd.cmdGeneric(0x02)
         mdebug(0, "Çip kimliği: 0x%x (%s)" % (id, chip_ids.get(id, "Bilinmeyen")))
 
         if conf['write'] or conf['verify']:
             data = list(map(lambda c: ord(c), open(args[0], 'rb').read()))
 
         if conf['erase']:
-            cmd.cmdEraseMemory()
+            cmd.cmdGeneric(0x43)
 
         if conf['write']:
+            cmd.cmdGeneric(0x31)
+            cmd._wait_for_ask("Write Enable")
             cmd.writeMemory(conf['address'], data)
 
         if conf['verify']:
             verify = cmd.readMemory(conf['address'], len(data))
             if data == verify:
-                print ("Doğrulama başarılı")
+                print("Doğrulama başarılı")
             else:
-                print ("Doğrulama BAŞARISIZ")
-                print (str(len(data)) + ' vs ' + str(len(verify)))
+                print("Doğrulama BAŞARISIZ")
+                print(str(len(data)) + ' vs ' + str(len(verify)))
                 for i in range(0, len(data)):
                     if data[i] != verify[i]:
-                        print (hex(i) + ': ' + hex(data[i]) + ' vs ' + hex(verify[i]))
+                        print(hex(i) + ': ' + hex(data[i]) + ' vs ' + hex(verify[i]))
 
         if not conf['write'] and conf['read']:
             rdata = cmd.readMemory(conf['address'], conf['len'])
             open(args[0], 'wb').write(''.join(map(chr, rdata)))
 
         if conf['go_addr'] != -1:
-            cmd.cmdGo(conf['go_addr'])
+            cmd.cmdGeneric(0x21)
+            cmd._wait_for_ask("Run")
 
     finally:
         cmd.releaseChip()
